@@ -1,369 +1,337 @@
-<!DOCTYPE html>
-<html lang="th">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Executive Dashboard</title>
-    <!-- Tailwind CSS -->
-    <script src="https://cdn.tailwindcss.com"></script>
-    <!-- React 18 -->
-    <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
-    <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
-    <!-- Prop-Types -->
-    <script src="https://unpkg.com/prop-types@15.8.1/prop-types.min.js"></script>
-    <!-- Recharts -->
-    <script src="https://unpkg.com/recharts@2.12.7/umd/Recharts.js"></script>
-    <!-- Babel for JSX -->
-    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
-    <!-- Lucide Icons -->
-    <script src="https://unpkg.com/lucide@latest"></script>
-    <style>
-        @import url('https://fonts.googleapis.com/css2?family=Sarabun:wght@300;400;600;700&display=swap');
-        body { font-family: 'Sarabun', sans-serif; }
-        .animate-in { animation: fadeIn 0.5s ease-out forwards; }
-        @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
-        @media print { .print\:hidden { display: none !important; } }
-    </style>
-</head>
-<body class="bg-slate-50">
-    <div id="root"></div>
+import React, { useState, useMemo, useEffect, useCallback } from 'react';
+import { 
+  BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer
+} from 'recharts';
+import { 
+  LayoutDashboard, FileText, FileSpreadsheet, Printer, 
+  TrendingUp, Filter, RefreshCw, AlertTriangle, User
+} from 'lucide-react';
 
-    <script type="text/babel">
-        const { useState, useMemo, useEffect, useCallback } = React;
-        const { 
-            BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer 
-        } = Recharts;
+// แยกลิงก์ตาม Sheet ที่ระบุมา
+const URL_SUBJOB = 'https://docs.google.com/spreadsheets/d/e/2PACX-1vTEF6nqVsW4bMMHGVSONXwgbSI2hMPF7ssxpCaoLU1gp9QZGz93dHiK_pS6X3ynz8HEQ0vJU2oFeLPW/pub?gid=1145286031&single=true&output=csv';
+const URL_ACCOUNT = 'https://docs.google.com/spreadsheets/d/e/2PACX-1vTEF6nqVsW4bMMHGVSONXwgbSI2hMPF7ssxpCaoLU1gp9QZGz93dHiK_pS6X3ynz8HEQ0vJU2oFeLPW/pub?gid=162647430&single=true&output=csv';
 
-        // ไอคอน
-        const Icon = ({ name, size = 16, className = "" }) => {
-            useEffect(() => { if (window.lucide) lucide.createIcons(); }, [name]);
-            return <i data-lucide={name} className={className} style={{ width: size, height: size, display: 'inline-block' }}></i>;
+// ฟังก์ชันแปลง CSV เป็น Array Object
+const parseCSV = (str) => {
+  if (!str) return [];
+  const rows = str.trim().split(/\r?\n/);
+  if (rows.length < 2) return [];
+  
+  const headers = rows[0].split(',').map(h => h.trim().toLowerCase().replace(/"/g, ''));
+  return rows.slice(1).map(row => {
+    const values = row.split(/,(?=(?:(?:[^"]*"){2})*[^"]*$)/).map(v => v.trim().replace(/"/g, ''));
+    const obj = {};
+    headers.forEach((h, i) => { if(h) obj[h] = values[i] || ''; });
+    return obj;
+  });
+};
+
+/**
+ * ฟังก์ชันดึงค่าโดยระบุ Keyword หรือชื่อคอลัมน์ที่แน่นอน
+ */
+const getVal = (row, keywords) => {
+  const key = Object.keys(row).find(k => keywords.some(kw => k.toLowerCase() === kw.toLowerCase() || k.includes(kw.toLowerCase())));
+  return key ? row[key] : '';
+};
+
+export default function App() {
+  const [activeTab, setActiveTab] = useState('overview');
+  const [subJobData, setSubJobData] = useState([]);
+  const [accountData, setAccountData] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+  const [filterMonth, setFilterMonth] = useState('all');
+  const [filterYear, setFilterYear] = useState('2025');
+  const [filterSales, setFilterSales] = useState('all');
+
+  const fetchData = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    
+    // ดึงข้อมูลโดยตรง (Google Sheets CSV รองรับ CORS อยู่แล้ว) 
+    // เพิ่ม timestamp เพื่อป้องกันเบราว์เซอร์หรือ GitHub Pages ทำการจำแคชข้อมูลเก่า
+    const tryFetch = async (url) => {
+      const fetchUrl = `${url}&t=${new Date().getTime()}`;
+      const res = await fetch(fetchUrl);
+      if (!res.ok) throw new Error(`HTTP error! status: ${res.status}`);
+      return await res.text();
+    };
+
+    try {
+      const [resSub, resAcc] = await Promise.all([
+        tryFetch(URL_SUBJOB),
+        tryFetch(URL_ACCOUNT)
+      ]);
+
+      const parsedSub = parseCSV(resSub);
+      const parsedAcc = parseCSV(resAcc);
+
+      const mappedSub = parsedSub.map((row, idx) => {
+        const poRawValue = getVal(row, ['po./wo.value', 'po/wo value', 'po value', 'ยอดขาย']);
+        const cleanedValue = parseFloat(poRawValue.replace(/[^0-9.-]+/g, "")) || 0;
+
+        return {
+          id: `s-${idx}`,
+          date: getVal(row, ['date', 'วันที่', 'เดือน']) || '',
+          salesName: getVal(row, ['sales', 'พนักงาน']) || 'ไม่ระบุ',
+          poValue: cleanedValue
         };
+      }).filter(i => i.date !== '');
 
-        const URL_SUBJOB = 'https://docs.google.com/spreadsheets/d/e/2PACX-1vTEF6nqVsW4bMMHGVSONXwgbSI2hMPF7ssxpCaoLU1gp9QZGz93dHiK_pS6X3ynz8HEQ0vJU2oFeLPW/pub?gid=1145286031&single=true&output=csv';
-        const URL_ACCOUNT = 'https://docs.google.com/spreadsheets/d/e/2PACX-1vTEF6nqVsW4bMMHGVSONXwgbSI2hMPF7ssxpCaoLU1gp9QZGz93dHiK_pS6X3ynz8HEQ0vJU2oFeLPW/pub?gid=162647430&single=true&output=csv';
+      const mappedAcc = parsedAcc.map((row, idx) => ({
+        id: `a-${idx}`,
+        date: getVal(row, ['date', 'วันที่', 'เดือน']) || '',
+        salesName: getVal(row, ['sales', 'พนักงาน']) || 'ไม่ระบุ',
+        customerName: getVal(row, ['customer', 'ลูกค้า', 'บริษัท']) || '-',
+        invoiceNo: getVal(row, ['invoice', 'inv', 'เลขที่']) || '-',
+        amount: parseFloat((getVal(row, ['amount', 'ยอด', 'รวม']) || '0').replace(/[^0-9.-]+/g, "")) || 0
+      })).filter(i => i.date !== '');
 
-        const getProxyUrl = (url) => `https://corsproxy.io/?${encodeURIComponent(url)}`;
+      setSubJobData(mappedSub);
+      setAccountData(mappedAcc);
+    } catch (err) {
+      console.error("Fetch Final Error:", err);
+      setError("ไม่สามารถดึงข้อมูลได้ โปรดตรวจสอบการ Publish Google Sheets หรือการเชื่อมต่ออินเทอร์เน็ต");
+    } finally {
+      setLoading(false);
+    }
+  }, []);
 
-        /**
-         * ฟังก์ชันดึงค่าจาก Object โดยใช้ Keywords หลายคำ (Case-insensitive)
-         */
-        const getValueByKeywords = (row, keywords) => {
-            const keys = Object.keys(row);
-            const foundKey = keys.find(k => {
-                const cleanK = k.toLowerCase().trim();
-                return keywords.some(kw => cleanK === kw.toLowerCase() || cleanK.includes(kw.toLowerCase()));
-            });
-            return foundKey ? row[foundKey] : "";
-        };
+  useEffect(() => {
+    fetchData();
+  }, [fetchData]);
 
-        /**
-         * แปลงค่าเงินจาก String เป็น Number
-         */
-        const parseMoney = (val) => {
-            if (!val) return 0;
-            const cleaned = val.toString().replace(/[^0-9.-]+/g, "");
-            return parseFloat(cleaned) || 0;
-        };
+  const salesList = useMemo(() => {
+    const names = new Set();
+    subJobData.forEach(item => { if(item.salesName) names.add(item.salesName); });
+    accountData.forEach(item => { if(item.salesName) names.add(item.salesName); });
+    return Array.from(names).sort();
+  }, [subJobData, accountData]);
 
-        const parseCSV = (str) => {
-            if (!str) return [];
-            const rows = str.trim().split(/\r?\n/);
-            if (rows.length < 2) return [];
-            const headers = rows[0].split(',').map(h => h.trim().toLowerCase().replace(/"/g, ''));
-            return rows.slice(1).map(row => {
-                const values = row.split(/,(?=(?:(?:[^"]*"){2})*[^"]*$)/).map(v => v.trim().replace(/"/g, ''));
-                const obj = {};
-                headers.forEach((h, i) => { if(h) obj[h] = values[i] || ''; });
-                return obj;
-            });
-        };
-
-        function App() {
-            const [activeTab, setActiveTab] = useState('overview');
-            const [subJobData, setSubJobData] = useState([]);
-            const [accountData, setAccountData] = useState([]);
-            const [loading, setLoading] = useState(true);
-            const [error, setError] = useState(null);
-            
-            const [filterMonth, setFilterMonth] = useState('all');
-            const [filterYear, setFilterYear] = useState('2025');
-            const [filterSales, setFilterSales] = useState('all');
-
-            const fetchData = useCallback(async () => {
-                setLoading(true);
-                setError(null);
-                try {
-                    const fetchCSV = async (url) => {
-                        const res = await fetch(getProxyUrl(url));
-                        if (!res.ok) throw new Error("Fetch failed");
-                        return await res.text();
-                    };
-
-                    const [resSub, resAcc] = await Promise.all([fetchCSV(URL_SUBJOB), fetchCSV(URL_ACCOUNT)]);
-                    
-                    // ปรับปรุงการ Map ข้อมูล SubJOB
-                    const mappedSub = parseCSV(resSub).map((row, idx) => {
-                        const date = getValueByKeywords(row, ['date', 'วันที่', 'เดือน']);
-                        const sales = getValueByKeywords(row, ['sales', 'พนักงาน', 'ชื่อพนักงาน']);
-                        const poVal = getValueByKeywords(row, ['po./wo.value', 'po value', 'ยอดขาย', 'จำนวนเงิน']);
-                        
-                        return {
-                            id: `s-${idx}`,
-                            date: date,
-                            salesName: sales || 'ไม่ระบุชื่อ',
-                            poValue: parseMoney(poVal)
-                        };
-                    }).filter(i => i.date !== "");
-
-                    // ปรับปรุงการ Map ข้อมูล ACCOUNT
-                    const mappedAcc = parseCSV(resAcc).map((row, idx) => {
-                        const date = getValueByKeywords(row, ['date', 'วันที่', 'เดือน']);
-                        const sales = getValueByKeywords(row, ['sales', 'พนักงาน', 'ชื่อพนักงาน']);
-                        const customer = getValueByKeywords(row, ['customer', 'ลูกค้า', 'บริษัท', 'ชื่อลูกค้า']);
-                        const amount = getValueByKeywords(row, ['amount', 'ยอด', 'รวม', 'จำนวนเงิน', 'ยอดวางบิล']);
-
-                        return {
-                            id: `a-${idx}`,
-                            date: date,
-                            salesName: sales || 'ไม่ระบุชื่อ',
-                            customerName: customer || '-',
-                            amount: parseMoney(amount)
-                        };
-                    }).filter(i => i.date !== "");
-
-                    setSubJobData(mappedSub);
-                    setAccountData(mappedAcc);
-                    setTimeout(() => { if(window.lucide) lucide.createIcons(); }, 300);
-                } catch (err) {
-                    setError("พบข้อผิดพลาดในการดึงข้อมูล กรุณาตรวจสอบการ Publish CSV ใน Google Sheets");
-                } finally {
-                    setLoading(false);
-                }
-            }, []);
-
-            useEffect(() => { fetchData(); }, [fetchData]);
-
-            const salesList = useMemo(() => {
-                const names = new Set([...subJobData.map(i => i.salesName), ...accountData.map(i => i.salesName)]);
-                return Array.from(names).filter(n => n && n !== 'ไม่ระบุชื่อ').sort();
-            }, [subJobData, accountData]);
-
-            // Filter Logic
-            const filteredSub = useMemo(() => subJobData.filter(item => {
-                const parts = item.date.split('/');
-                const m = parts[1] ? parseInt(parts[1]).toString() : "";
-                const y = parts[2] ? parts[2] : "";
-                const mMatch = filterMonth === 'all' || m === filterMonth;
-                const yMatch = filterYear === 'all' || y.includes(filterYear);
-                const sMatch = filterSales === 'all' || item.salesName === filterSales;
-                return mMatch && yMatch && sMatch;
-            }), [subJobData, filterMonth, filterYear, filterSales]);
-
-            const filteredAcc = useMemo(() => accountData.filter(item => {
-                const parts = item.date.split('/');
-                const m = parts[1] ? parseInt(parts[1]).toString() : "";
-                const y = parts[2] ? parts[2] : "";
-                const mMatch = filterMonth === 'all' || m === filterMonth;
-                const yMatch = filterYear === 'all' || y.includes(filterYear);
-                const sMatch = filterSales === 'all' || item.salesName === filterSales;
-                return mMatch && yMatch && sMatch;
-            }), [accountData, filterMonth, filterYear, filterSales]);
-
-            const stats = useMemo(() => {
-                const totalSales = filteredSub.reduce((sum, i) => sum + i.poValue, 0);
-                const totalBilled = filteredAcc.reduce((sum, i) => sum + i.amount, 0);
-                
-                const salesMap = {};
-                filteredSub.forEach(i => {
-                    if (!salesMap[i.salesName]) salesMap[i.salesName] = { name: i.salesName, sales: 0, billed: 0 };
-                    salesMap[i.salesName].sales += i.poValue;
-                });
-                filteredAcc.forEach(i => {
-                    if (!salesMap[i.salesName]) salesMap[i.salesName] = { name: i.salesName, sales: 0, billed: 0 };
-                    salesMap[i.salesName].billed += i.amount;
-                });
-                
-                return { 
-                    totalSales, 
-                    totalBilled, 
-                    chart: Object.values(salesMap).sort((a,b) => b.sales - a.sales) 
-                };
-            }, [filteredSub, filteredAcc]);
-
-            const formatCurr = (v) => new Intl.NumberFormat('th-TH', { style: 'currency', currency: 'THB', minimumFractionDigits: 0 }).format(v);
-
-            if (loading) return (
-                <div className="flex h-screen items-center justify-center bg-white">
-                    <div className="text-center">
-                        <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-emerald-600 mx-auto"></div>
-                        <p className="mt-4 text-emerald-800 font-medium">กำลังประมวลผลข้อมูลล่าสุด...</p>
-                    </div>
-                </div>
-            );
-
-            return (
-                <div className="min-h-screen pb-20 bg-slate-50">
-                    <header className="bg-emerald-900 text-white p-4 sticky top-0 z-50 shadow-lg print:hidden">
-                        <div className="max-w-7xl mx-auto flex flex-col md:flex-row justify-between items-center gap-4">
-                            <div className="flex items-center gap-3">
-                                <Icon name="bar-chart-3" className="text-emerald-400" size={24} />
-                                <h1 className="text-xl font-bold">Executive Sales Report</h1>
-                            </div>
-                            <nav className="flex gap-2 bg-emerald-950/50 p-1 rounded-xl">
-                                {['overview', 'subjob', 'account'].map(t => (
-                                    <button key={t} onClick={() => setActiveTab(t)} 
-                                        className={`px-4 py-2 rounded-lg text-sm font-bold transition-all ${activeTab === t ? 'bg-emerald-600 text-white' : 'text-emerald-300'}`}>
-                                        {t === 'overview' ? 'สรุปผล' : t === 'subjob' ? 'ยอดขาย' : 'วางบิล'}
-                                    </button>
-                                ))}
-                            </nav>
-                        </div>
-                    </header>
-
-                    <main className="max-w-7xl mx-auto px-4 pt-6">
-                        {error && (
-                            <div className="bg-red-50 border border-red-200 text-red-700 p-4 rounded-xl mb-6 flex justify-between items-center">
-                                <span>{error}</span>
-                                <button onClick={fetchData} className="bg-red-700 text-white px-4 py-1 rounded-lg text-xs">ลองอีกครั้ง</button>
-                            </div>
-                        )}
-
-                        <div className="flex flex-wrap items-center justify-between gap-4 bg-white p-4 rounded-2xl shadow-sm border border-slate-100 mb-6 print:hidden">
-                            <div className="flex flex-wrap gap-4">
-                                <div className="flex items-center gap-2">
-                                    <span className="text-[10px] font-bold text-slate-400 uppercase tracking-tighter">ประจำเดือน:</span>
-                                    <select value={filterMonth} onChange={e => setFilterMonth(e.target.value)} className="border border-slate-200 rounded-lg px-2 py-1.5 text-sm">
-                                        <option value="all">ทุกเดือน</option>
-                                        {Array.from({length: 12}, (_, i) => <option key={i+1} value={i+1}>{new Date(0, i).toLocaleString('th-TH', {month: 'long'})}</option>)}
-                                    </select>
-                                </div>
-                                <div className="flex items-center gap-2">
-                                    <span className="text-[10px] font-bold text-slate-400 uppercase tracking-tighter">พนักงาน:</span>
-                                    <select value={filterSales} onChange={e => setFilterSales(e.target.value)} className="border border-slate-200 rounded-lg px-2 py-1.5 text-sm font-bold text-emerald-700">
-                                        <option value="all">ทุกคน</option>
-                                        {salesList.map(name => <option key={name} value={name}>{name}</option>)}
-                                    </select>
-                                </div>
-                            </div>
-                            <button onClick={() => window.print()} className="bg-slate-800 text-white px-5 py-2 rounded-xl text-sm font-bold flex items-center gap-2 hover:bg-slate-700">
-                                <Icon name="printer" size={16} /> Print Report
-                            </button>
-                        </div>
-
-                        {activeTab === 'overview' && (
-                            <div className="animate-in space-y-6">
-                                <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-                                    <div className="bg-white p-6 rounded-3xl shadow-sm border border-slate-100 text-center">
-                                        <p className="text-slate-400 text-xs font-bold uppercase mb-2">ยอดขาย (PO Value)</p>
-                                        <h3 className="text-3xl font-black text-emerald-600">{formatCurr(stats.totalSales)}</h3>
-                                    </div>
-                                    <div className="bg-white p-6 rounded-3xl shadow-sm border border-slate-100 text-center">
-                                        <p className="text-slate-400 text-xs font-bold uppercase mb-2">วางบิลสำเร็จ</p>
-                                        <h3 className="text-3xl font-black text-blue-600">{formatCurr(stats.totalBilled)}</h3>
-                                    </div>
-                                    <div className="bg-slate-900 p-6 rounded-3xl shadow-xl text-white text-center border-t-4 border-emerald-400">
-                                        <p className="text-emerald-400/60 text-xs font-bold uppercase mb-2">ยอดค้างรับ (Pending)</p>
-                                        <h3 className="text-3xl font-black text-emerald-400">{formatCurr(stats.totalSales - stats.totalBilled)}</h3>
-                                    </div>
-                                </div>
-                                
-                                <div className="bg-white p-8 rounded-3xl shadow-sm border border-slate-100 h-[450px]">
-                                    <h4 className="text-sm font-bold text-slate-800 mb-8 flex items-center gap-2">
-                                        <span className="w-1.5 h-4 bg-emerald-500 rounded-full"></span>
-                                        ยอดขายเทียบการวางบิลแยกตามพนักงาน
-                                    </h4>
-                                    <ResponsiveContainer width="100%" height="90%">
-                                        <BarChart data={stats.chart}>
-                                            <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
-                                            <XAxis dataKey="name" axisLine={false} tickLine={false} tick={{fill: '#94a3b8', fontSize: 12}} />
-                                            <YAxis axisLine={false} tickLine={false} tick={{fill: '#94a3b8', fontSize: 10}} />
-                                            <Tooltip cursor={{fill: '#f8fafc'}} contentStyle={{borderRadius: '16px', border: 'none', boxShadow: '0 10px 15px -3px rgba(0,0,0,0.1)'}} />
-                                            <Legend verticalAlign="top" align="right" iconType="circle" />
-                                            <Bar name="ยอดขาย" dataKey="sales" fill="#10b981" radius={[4, 4, 0, 0]} barSize={40} />
-                                            <Bar name="วางบิล" dataKey="billed" fill="#cbd5e1" radius={[4, 4, 0, 0]} barSize={40} />
-                                        </BarChart>
-                                    </ResponsiveContainer>
-                                </div>
-                            </div>
-                        )}
-
-                        {activeTab === 'subjob' && (
-                            <div className="animate-in bg-white rounded-3xl border border-slate-200 overflow-hidden shadow-sm">
-                                <div className="p-5 border-b bg-emerald-50/50 flex justify-between items-center">
-                                    <h2 className="font-bold text-emerald-900 italic underline">LIST: รายการยอดขาย (SubJOB)</h2>
-                                    <span className="text-xs text-emerald-600 font-bold uppercase tracking-widest">{filteredSub.length} รายการ</span>
-                                </div>
-                                <div className="overflow-x-auto">
-                                    <table className="w-full text-sm text-left">
-                                        <thead className="bg-slate-50 text-[10px] text-slate-400 uppercase tracking-widest">
-                                            <tr>
-                                                <th className="px-6 py-4">วันที่</th>
-                                                <th className="px-6 py-4">พนักงานขาย</th>
-                                                <th className="px-6 py-4 text-right">ยอด PO Value</th>
-                                            </tr>
-                                        </thead>
-                                        <tbody className="divide-y divide-slate-100 text-slate-700">
-                                            {filteredSub.map(item => (
-                                                <tr key={item.id} className="hover:bg-slate-50 transition-colors">
-                                                    <td className="px-6 py-4 font-mono text-xs">{item.date}</td>
-                                                    <td className="px-6 py-4 font-bold">{item.salesName}</td>
-                                                    <td className="px-6 py-4 text-right font-black text-slate-900">{formatCurr(item.poValue)}</td>
-                                                </tr>
-                                            ))}
-                                        </tbody>
-                                        <tfoot className="bg-emerald-50">
-                                            <tr className="font-bold border-t-2 border-emerald-100">
-                                                <td colSpan="2" className="px-6 py-4 text-right text-emerald-900 uppercase text-xs">รวมยอดขาย</td>
-                                                <td className="px-6 py-4 text-right text-emerald-700 text-lg">{formatCurr(stats.totalSales)}</td>
-                                            </tr>
-                                        </tfoot>
-                                    </table>
-                                </div>
-                            </div>
-                        )}
-
-                        {activeTab === 'account' && (
-                            <div className="animate-in bg-white rounded-3xl border border-slate-200 overflow-hidden shadow-sm">
-                                <div className="p-5 border-b bg-blue-50/50 flex justify-between items-center">
-                                    <h2 className="font-bold text-blue-900 italic underline">LIST: ประวัติการวางบิล (ACCOUNT)</h2>
-                                    <span className="text-xs text-blue-600 font-bold uppercase tracking-widest">{filteredAcc.length} รายการ</span>
-                                </div>
-                                <div className="overflow-x-auto">
-                                    <table className="w-full text-sm text-left">
-                                        <thead className="bg-slate-50 text-[10px] text-slate-400 uppercase tracking-widest">
-                                            <tr>
-                                                <th className="px-6 py-4">วันที่</th>
-                                                <th className="px-6 py-4">ลูกค้า / บริษัท</th>
-                                                <th className="px-6 py-4 text-right">ยอดวางบิล</th>
-                                            </tr>
-                                        </thead>
-                                        <tbody className="divide-y divide-slate-100 text-slate-700">
-                                            {filteredAcc.map(item => (
-                                                <tr key={item.id} className="hover:bg-slate-50 transition-colors">
-                                                    <td className="px-6 py-4 font-mono text-xs">{item.date}</td>
-                                                    <td className="px-6 py-4 font-bold text-slate-900">{item.customerName}</td>
-                                                    <td className="px-6 py-4 text-right font-black text-blue-600">{formatCurr(item.amount)}</td>
-                                                </tr>
-                                            ))}
-                                        </tbody>
-                                        <tfoot className="bg-slate-100">
-                                            <tr className="font-bold border-t-2 border-slate-200">
-                                                <td colSpan="2" className="px-6 py-4 text-right text-slate-500 uppercase text-xs">รวมวางบิลแล้ว</td>
-                                                <td className="px-6 py-4 text-right text-slate-900 text-lg">{formatCurr(stats.totalBilled)}</td>
-                                            </tr>
-                                        </tfoot>
-                                    </table>
-                                </div>
-                            </div>
-                        )}
-                    </main>
-                </div>
-            );
+  const applyFilters = (list) => {
+    return list.filter(item => {
+      let dateMatch = true;
+      if (item.date) {
+        const parts = item.date.split('/');
+        if (parts.length >= 2) {
+          const m = parseInt(parts[1]).toString();
+          const y = parts[2] ? parts[2] : '2025';
+          const matchMonth = filterMonth === 'all' || m === filterMonth;
+          const matchYear = filterYear === 'all' || y.includes(filterYear);
+          dateMatch = matchMonth && matchYear;
         }
+      }
+      const salesMatch = filterSales === 'all' || item.salesName === filterSales;
+      return dateMatch && salesMatch;
+    });
+  };
 
-        const root = ReactDOM.createRoot(document.getElementById('root'));
-        root.render(<App />);
-    </script>
-</body>
-</html>
+  const filteredSub = useMemo(() => applyFilters(subJobData), [subJobData, filterMonth, filterYear, filterSales]);
+  const filteredAcc = useMemo(() => applyFilters(accountData), [accountData, filterMonth, filterYear, filterSales]);
+
+  const stats = useMemo(() => {
+    const totalSales = filteredSub.reduce((sum, i) => sum + i.poValue, 0);
+    const totalBilled = filteredAcc.reduce((sum, i) => sum + i.amount, 0);
+    const salesMap = {};
+    
+    filteredSub.forEach(i => {
+      if (!salesMap[i.salesName]) salesMap[i.salesName] = { name: i.salesName, sales: 0, billed: 0 };
+      salesMap[i.salesName].sales += i.poValue;
+    });
+    filteredAcc.forEach(i => {
+      if (!salesMap[i.salesName]) salesMap[i.salesName] = { name: i.salesName, sales: 0, billed: 0 };
+      salesMap[i.salesName].billed += i.amount;
+    });
+    return { 
+      totalSales, 
+      totalBilled, 
+      chart: Object.values(salesMap).sort((a, b) => b.sales - a.sales) 
+    };
+  }, [filteredSub, filteredAcc]);
+
+  const formatCurr = (v) => new Intl.NumberFormat('th-TH', { style: 'currency', currency: 'THB', minimumFractionDigits: 0 }).format(v);
+
+  if (loading) return (
+    <div className="flex h-screen items-center justify-center bg-white">
+      <div className="text-center">
+        <div className="animate-spin rounded-full h-10 w-10 border-b-2 border-emerald-600 mx-auto"></div>
+        <p className="mt-4 text-emerald-800 font-medium italic">กำลังดึงข้อมูล...</p>
+      </div>
+    </div>
+  );
+
+  return (
+    <div className="min-h-screen bg-slate-50 text-slate-900 pb-20 font-sans">
+      <header className="bg-emerald-900 text-white p-4 sticky top-0 z-50 shadow-lg print:hidden">
+        <div className="max-w-7xl mx-auto flex flex-col md:flex-row justify-between items-center gap-4">
+          <div className="flex items-center gap-3">
+            <div className="bg-emerald-500 p-2 rounded-lg"><TrendingUp size={20} /></div>
+            <h1 className="text-xl font-bold tracking-tight text-white">Executive Dashboard</h1>
+          </div>
+          <div className="flex gap-1 bg-emerald-950/50 p-1 rounded-xl">
+            {[{ id: 'overview', label: 'ภาพรวม', icon: LayoutDashboard }, { id: 'subjob', label: 'ยอดขาย', icon: FileText }, { id: 'account', label: 'วางบิล', icon: FileSpreadsheet }].map(tab => (
+              <button key={tab.id} onClick={() => setActiveTab(tab.id)} className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-all ${activeTab === tab.id ? 'bg-emerald-600 text-white shadow-md' : 'text-emerald-300 hover:text-white'}`}>
+                <tab.icon size={16} /><span className="hidden sm:inline">{tab.label}</span>
+              </button>
+            ))}
+          </div>
+        </div>
+      </header>
+
+      <main className="max-w-7xl mx-auto px-4 pt-6">
+        {error && (
+          <div className="mb-6 bg-red-50 border border-red-200 p-4 rounded-2xl flex items-center justify-between text-red-800">
+            <div className="flex items-center gap-3">
+              <AlertTriangle size={20} />
+              <p className="text-sm font-medium">{error}</p>
+            </div>
+            <button onClick={() => fetchData()} className="text-xs font-bold bg-red-800 text-white px-3 py-1.5 rounded-lg hover:bg-red-700 transition-colors uppercase">RETRY</button>
+          </div>
+        )}
+
+        {/* ส่วนตัวกรองข้อมูล */}
+        <div className="flex flex-wrap items-center justify-between gap-4 bg-white p-4 rounded-2xl shadow-sm border border-slate-200 mb-6 print:hidden">
+          <div className="flex flex-wrap items-center gap-3 md:gap-6">
+            <div className="flex items-center gap-2">
+              <Filter size={16} className="text-slate-400" />
+              <select value={filterMonth} onChange={e => setFilterMonth(e.target.value)} className="bg-slate-50 border border-slate-200 rounded-lg px-3 py-1.5 text-sm outline-none font-medium">
+                <option value="all">ทุกเดือน</option>
+                {Array.from({length: 12}, (_, i) => <option key={i+1} value={i+1}>{new Date(0, i).toLocaleString('th-TH', {month: 'long'})}</option>)}
+              </select>
+              <select value={filterYear} onChange={e => setFilterYear(e.target.value)} className="bg-slate-50 border border-slate-200 rounded-lg px-3 py-1.5 text-sm outline-none font-medium">
+                <option value="2024">2024</option><option value="2025">2025</option><option value="2026">2026</option>
+              </select>
+            </div>
+            
+            <div className="flex items-center gap-2 border-l border-slate-100 pl-3 md:pl-6">
+              <User size={16} className="text-slate-400" />
+              <select value={filterSales} onChange={e => setFilterSales(e.target.value)} className="bg-slate-50 border border-slate-200 rounded-lg px-3 py-1.5 text-sm outline-none font-medium text-emerald-700">
+                <option value="all">พนักงานขายทุกคน</option>
+                {salesList.map(name => <option key={name} value={name}>{name}</option>)}
+              </select>
+            </div>
+          </div>
+          
+          <div className="flex gap-2">
+            <button onClick={() => fetchData()} className="p-2 text-slate-400 hover:text-emerald-600 transition-colors"><RefreshCw size={20} /></button>
+            <button onClick={() => window.print()} className="bg-slate-800 text-white px-5 py-2 rounded-xl text-sm font-bold flex items-center gap-2 hover:bg-slate-700"><Printer size={16} /> พิมพ์รายงาน</button>
+          </div>
+        </div>
+
+        {activeTab === 'overview' && (
+          <div className="space-y-6 animate-in fade-in duration-500">
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+              <div className="bg-white p-6 rounded-3xl shadow-sm border border-slate-100">
+                <p className="text-slate-500 text-xs font-bold uppercase tracking-widest text-emerald-600">ยอดขายรวม (PO./WO.)</p>
+                <h3 className="text-3xl font-black text-emerald-700 mt-2">{formatCurr(stats.totalSales)}</h3>
+              </div>
+              <div className="bg-white p-6 rounded-3xl shadow-sm border border-slate-100">
+                <p className="text-slate-500 text-xs font-bold uppercase tracking-widest text-blue-600">ยอดวางบิลสะสม</p>
+                <h3 className="text-3xl font-black text-slate-800 mt-2">{formatCurr(stats.totalBilled)}</h3>
+              </div>
+              <div className="bg-slate-900 p-6 rounded-3xl shadow-xl text-white">
+                <p className="text-slate-400 text-xs font-bold uppercase tracking-widest">ค้างรับ (Outstanding)</p>
+                <h3 className="text-3xl font-black mt-2 text-emerald-400">{formatCurr(stats.totalSales - stats.totalBilled)}</h3>
+              </div>
+            </div>
+
+            <div className="bg-white p-8 rounded-3xl shadow-sm border border-slate-100 h-96">
+              <h4 className="font-bold text-slate-800 mb-8 flex items-center gap-2">
+                <span className="w-2 h-6 bg-emerald-500 rounded-full"></span>
+                Performance Comparison
+              </h4>
+              <ResponsiveContainer width="100%" height="80%">
+                <BarChart data={stats.chart}>
+                  <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
+                  <XAxis dataKey="name" axisLine={false} tickLine={false} tick={{fill: '#94a3b8', fontSize: 10}} />
+                  <YAxis axisLine={false} tickLine={false} tick={{fill: '#94a3b8', fontSize: 10}} tickFormatter={v => (v/1000).toLocaleString() + 'k'} />
+                  <Tooltip cursor={{fill: '#f8fafc'}} contentStyle={{borderRadius: '16px', border: 'none', boxShadow: '0 20px 25px -5px rgba(0,0,0,0.1)'}} />
+                  <Legend verticalAlign="top" align="right" iconType="circle" />
+                  <Bar name="ยอดขาย" dataKey="sales" fill="#10b981" radius={[6, 6, 0, 0]} />
+                  <Bar name="วางบิลแล้ว" dataKey="billed" fill="#cbd5e1" radius={[6, 6, 0, 0]} />
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
+          </div>
+        )}
+
+        {activeTab === 'subjob' && (
+          <div className="bg-white rounded-3xl border border-slate-200 overflow-hidden shadow-sm animate-in slide-in-from-bottom-4 duration-500">
+            <div className="bg-emerald-50 px-6 py-4 border-b border-emerald-100 flex justify-between items-center font-bold text-emerald-900">
+              รายละเอียด SubJOB {filterSales !== 'all' && `เฉพาะ: ${filterSales}`}
+            </div>
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm text-left">
+                <thead className="bg-slate-50 text-[10px] text-slate-400 uppercase tracking-widest font-bold">
+                  <tr><th className="px-6 py-4">วันที่</th><th className="px-6 py-4">พนักงานขาย</th><th className="px-6 py-4 text-right">ยอดขาย (PO./WO.)</th></tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100 text-slate-700">
+                  {filteredSub.length > 0 ? filteredSub.map(item => (
+                    <tr key={item.id} className="hover:bg-slate-50">
+                      <td className="px-6 py-4 font-mono text-xs text-slate-500">{item.date}</td>
+                      <td className="px-6 py-4 font-bold">{item.salesName}</td>
+                      <td className="px-6 py-4 text-right font-semibold">{formatCurr(item.poValue)}</td>
+                    </tr>
+                  )) : (
+                    <tr><td col colSpan="3" className="px-6 py-10 text-center text-slate-400 italic">ไม่พบข้อมูลตามเงื่อนไขที่เลือก</td></tr>
+                  )}
+                </tbody>
+                {filteredSub.length > 0 && (
+                  <tfoot className="bg-emerald-50/50">
+                    <tr className="border-t-2 border-emerald-100">
+                      <td colSpan="2" className="px-6 py-4 text-right font-bold text-emerald-900 text-base uppercase tracking-wider">
+                        รวมทั้งสิ้น ({filteredSub.length} รายการ)
+                      </td>
+                      <td className="px-6 py-4 text-right font-black text-emerald-700 text-lg">
+                        {formatCurr(stats.totalSales)}
+                      </td>
+                    </tr>
+                  </tfoot>
+                )}
+              </table>
+            </div>
+          </div>
+        )}
+
+        {activeTab === 'account' && (
+          <div className="bg-white rounded-3xl border border-slate-200 overflow-hidden shadow-sm animate-in slide-in-from-bottom-4 duration-500">
+            <div className="bg-slate-900 px-6 py-4 border-b border-slate-800 text-white font-bold">
+              ประวัติการวางบิล ACCOUNT {filterSales !== 'all' && `เฉพาะ: ${filterSales}`}
+            </div>
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm text-left">
+                <thead className="bg-slate-50 text-[10px] text-slate-400 uppercase tracking-widest font-bold">
+                  <tr><th className="px-4 py-4">วันที่</th><th className="px-4 py-4">พนักงานขาย</th><th className="px-4 py-4">ลูกค้า</th><th className="px-4 py-4 text-right">ยอดวางบิล</th></tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100 text-slate-700">
+                  {filteredAcc.length > 0 ? filteredAcc.map(item => (
+                    <tr key={item.id} className="hover:bg-slate-50">
+                      <td className="px-4 py-4 font-mono text-xs text-slate-500">{item.date}</td>
+                      <td className="px-4 py-4 text-xs font-medium">{item.salesName}</td>
+                      <td className="px-4 py-4 font-bold">{item.customerName}</td>
+                      <td className="px-4 py-4 text-right font-semibold">{formatCurr(item.amount)}</td>
+                    </tr>
+                  )) : (
+                    <tr><td colSpan="4" className="px-6 py-10 text-center text-slate-400 italic">ไม่พบข้อมูลตามเงื่อนไขที่เลือก</td></tr>
+                  )}
+                </tbody>
+                {filteredAcc.length > 0 && (
+                  <tfoot className="bg-slate-100/80">
+                    <tr className="border-t-2 border-slate-200">
+                      <td colSpan="3" className="px-6 py-4 text-right font-bold text-slate-700 text-base uppercase tracking-wider">
+                        รวมยอดวางบิลทั้งสิ้น ({filteredAcc.length} รายการ)
+                      </td>
+                      <td className="px-6 py-4 text-right font-black text-slate-900 text-lg">
+                        {formatCurr(stats.totalBilled)}
+                      </td>
+                    </tr>
+                  </tfoot>
+                )}
+              </table>
+            </div>
+          </div>
+        )}
+      </main>
+    </div>
+  );
+}
